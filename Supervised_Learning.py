@@ -122,7 +122,6 @@ def test(net, testloader):
 
 
 
-
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
@@ -172,7 +171,6 @@ if __name__ == "__main__":
         model = model_selection(model_name)
 
     params = sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6
-    print(params)
     #You may want to write a loader code that loads the model state to continue the learning process
     #Since this learning process may take a while.
     
@@ -183,7 +181,7 @@ if __name__ == "__main__":
         criterion = nn.CrossEntropyLoss()
     
     epoch =  30
-    optimizer = optim.Adam(model.parameters(), lr=0.00005, weight_decay=0.0001)
+    optimizer = optim.Adam(model.parameters(), lr=0.00005, weight_decay=0.00006)
     #scheduler = optim.lr_scheduler.ExponentialLR(optimizer, 0.95, last_epoch=- 1, verbose=False)
 
     #You may want to add a scheduler for your loss
