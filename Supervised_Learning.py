@@ -8,7 +8,8 @@ import torch.optim as optim
 import os
 from PIL import Image
 import argparse
-  
+
+from torchvision.transforms import AutoAugmentPolicy
 
 
 class CustomDataset(Dataset):
@@ -61,7 +62,7 @@ def model_selection(selection):
         model = models.mobilenet_v2(weights='IMAGENET1K_V2')
         model.classifier = nn.Sequential(
           nn.ReLU(inplace=True),
-          nn.Dropout(p=0.3),
+          nn.Dropout(p=0.4),
           nn.Linear(in_features=1280, out_features=50)
         )
         
@@ -75,11 +76,22 @@ def train(net1, labeled_loader, optimizer, criterion):
     total = 0
     total_loss = 0
     num_samples = 0
+
+    transform = transforms.Compose([
+        transforms.AutoAugment(AutoAugmentPolicy.IMAGENET),
+        transforms.ToTensor(),
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+    ])
+
+    dataset = CustomDataset(root='./data/Supervised_Learning/labeled', transform=transform)
+    labeled_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True)
+
     #Supervised_training
     for batch_idx, (inputs, targets) in enumerate(labeled_loader):
         if torch.cuda.is_available():
             inputs, targets = inputs.cuda(), targets.cuda()
         optimizer.zero_grad()
+
         outputs = net1(inputs)
         loss = criterion(outputs, targets)
         total_loss += loss.item() * inputs.size(0)
@@ -180,9 +192,9 @@ if __name__ == "__main__":
     else :
         criterion = nn.CrossEntropyLoss()
     
-    epoch =  30
+    epoch =  70
     optimizer = optim.Adam(model.parameters(), lr=0.00005, weight_decay=0.00006)
-    #scheduler = optim.lr_scheduler.ExponentialLR(optimizer, 0.95, last_epoch=- 1, verbose=False)
+    #scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda epoch: 0.95 ** epoch)
 
     #You may want to add a scheduler for your loss
     
