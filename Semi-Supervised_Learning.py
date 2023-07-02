@@ -13,12 +13,10 @@ import argparse
 
 class Ensemble(nn.Module):
 
-    def __init__(self, modelA, modelB, input):
+    def __init__(self, modelA, modelB):
         super(Ensemble, self).__init__()
         self.modelA = modelA
         self.modelB = modelB
-
-        self.fc1 = nn.Linear(input, 10)
 
     def forward(self, x):
         out1 = self.modelA(x)
@@ -109,7 +107,7 @@ def model_selection(selection):
         model = models.mobilenet_v2(weights='IMAGENET1K_V2')
         model.classifier = nn.Sequential(
             nn.ReLU(inplace=True),
-            nn.Dropout(p=0.4),
+            nn.Dropout(p=0.7),
             nn.Linear(in_features=1280, out_features=10, bias=True)
         )
 
@@ -128,7 +126,7 @@ def cotrain(net1,net2, labeled_loader, unlabled_loader, optimizer1_1, optimizer1
     correct1 = 0
     correct2 = 0
     total = 0
-    k = 0.8
+    k = 0.9
     #labeled_training
     for batch_idx, (inputs, targets) in enumerate(labeled_loader):
         inputs, targets = inputs.cuda(), targets.cuda()
@@ -183,7 +181,7 @@ def cotrain(net1,net2, labeled_loader, unlabled_loader, optimizer1_1, optimizer1
         confidence1 = torch.max(outputs1, dim=1).values
         confidence2 = torch.max(outputs2, dim=1).values
 
-        confident_mask = (predictions1 == predictions2) & (confidence1 > k) & (confidence2 > k)
+        confident_mask = ((predictions1 == predictions2) & (confidence1 > 0.7) & (confidence2 > 0.7)) | (confidence1 > k) |(confidence2 > k)
         confident_inputs = inputs[confident_mask]
         pseudo_outputs1 = net1(confident_inputs)
         pseudo_outputs2 = net2(confident_inputs)
@@ -194,10 +192,6 @@ def cotrain(net1,net2, labeled_loader, unlabled_loader, optimizer1_1, optimizer1
         pseudo_loss2 = criterion(pseudo_outputs2, confident_labels)
         pseudo_loss2.backward()
         optimizer2_2.step()
-
-        agreed_predictions = torch.where(predictions1 == predictions2, predictions1, -1)
-        confident_predictions = torch.where(confidence1 > k, predictions1, -1) | torch.where(
-            confidence2 > k, predictions2, -1)
 
 
 ####################
@@ -211,10 +205,12 @@ def cotrain(net1,net2, labeled_loader, unlabled_loader, optimizer1_1, optimizer1
 
 
 
-def test(net, testloader):
+def test(net, testloader, criterion):
     net.eval()
     correct = 0
     total = 0
+    total_loss = 0
+    num_samples = 0
     with torch.no_grad():
         for batch_idx, (inputs, targets) in enumerate(testloader):
             if torch.cuda.is_available():
@@ -222,7 +218,12 @@ def test(net, testloader):
             outputs = net(inputs)
             _, predicted = outputs.max(1)
             total += targets.size(0)
+            loss = criterion(outputs, targets)
             correct += predicted.eq(targets).sum().item()
+            total_loss += loss.item() * inputs.size(0)
+            num_samples += inputs.size(0)
+        avg_loss = total_loss / num_samples
+        print("val loss: {:.4f}".format(avg_loss))
         return 100. * correct / total
 
 
@@ -274,12 +275,14 @@ if __name__ == "__main__":
 
     
     
-    model_sel_1 =  'resnet'
+    model_sel_1 =  'mobilenet'
     model_sel_2 =  'mobilenet'
 
 
     model1 = model_selection(model_sel_1)
     model2 = model_selection(model_sel_2)
+    if args.test != 'False':
+        model1 = Ensemble(model1, model2)
     
     params_1 = sum(p.numel() for p in model1.parameters() if p.requires_grad) / 1e6
     params_2 = sum(p.numel() for p in model2.parameters() if p.requires_grad) / 1e6
@@ -299,31 +302,30 @@ if __name__ == "__main__":
         criterion = nn.CrossEntropyLoss()    
         
     
-    optimizer1_1 = optim.Adam(model1.parameters(), lr=0.0002, weight_decay=0.00007)
-    optimizer2_1 = optim.Adam(model2.parameters(), lr=0.0002, weight_decay=0.0001)
+    optimizer1_1 = optim.Adam(model1.parameters(), lr=0.0001)
+    optimizer2_1 = optim.Adam(model2.parameters(), lr=0.0001)
 
     optimizer1_2 = optim.Adam(model1.parameters(), lr=0.00001)
     optimizer2_2 = optim.Adam(model2.parameters(), lr=0.00001)
 
     epoch = 20
-
+    ensemble = Ensemble(model1, model2).cuda()
     if args.test == 'False':
         assert params_1 < 7.0, "Exceed the limit on the number of model_1 parameters" 
         assert params_2 < 7.0, "Exceed the limit on the number of model_2 parameters" 
 
         best_result_1 = 0
         best_result_2 = 0
-        ensemble = Ensemble(model1, model2, 10).cuda()
         for e in range(0, epoch):
             cotrain(model1, model2, labeled_loader, unlabeled_loader, optimizer1_1, optimizer1_2, optimizer2_1, optimizer2_2, criterion)
-            tmp_res_1 = test(ensemble, val_loader)
+            tmp_res_1 = test(ensemble, val_loader, criterion)
             # You can change the saving strategy, but you can't change file name/path for each model
             print ("[{}th epoch, model_1] ACC : {}".format(e, tmp_res_1))
             if best_result_1 < tmp_res_1:
                 best_result_1 = tmp_res_1
-                torch.save(model1.state_dict(),  os.path.join('./logs', 'Semi-Supervised_Learning', 'best_model_1.pt'))
+                torch.save(ensemble.state_dict(),  os.path.join('./logs', 'Semi-Supervised_Learning', 'best_model_1.pt'))
 
-            tmp_res_2 = test(model2, val_loader)
+            tmp_res_2 = test(model2, val_loader, criterion)
             # You can change save strategy, but you can't change file name/path for each model
             print ("[{}th epoch, model_2] ACC : {}".format(e, tmp_res_2))
             if best_result_2 < tmp_res_2:
@@ -337,10 +339,10 @@ if __name__ == "__main__":
         test_loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
 
         model1.load_state_dict(torch.load(os.path.join(args.student_abs_path, 'logs', 'Semi-Supervised_Learning', 'best_model_1.pt'), map_location=torch.device('cuda')))
-        res1 = test(model1, test_loader)
+        res1 = test(model1, test_loader, criterion)
         
         model2.load_state_dict(torch.load(os.path.join(args.student_abs_path, 'logs', 'Semi-Supervised_Learning', 'best_model_2.pt'), map_location=torch.device('cuda')))
-        res2 = test(model2, test_loader)
+        res2 = test(model2, test_loader, criterion)
         
         if res1>res2:
             best_res = res1
