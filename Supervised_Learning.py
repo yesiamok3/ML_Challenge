@@ -34,25 +34,6 @@ class CustomDataset(Dataset):
 
 
 
-
-####################
-#If you want to use your own custom model
-#Write your code here
-####################
-class Custom_model(nn.Module):
-    def __init__(self):
-        super(Custom_model, self).__init__()
-        #place your layers
-        #CNN, MLP and etc.
-
-    def forward(self, input):
-        #place for your model
-        #Input: 3* Width * Height
-        #Output: Probability of 50 class label
-        return predicted_label
-
-
-
 class Identity(nn.Module):
     def __init__(self):
         super(Identity, self).__init__()
@@ -64,31 +45,54 @@ class Identity(nn.Module):
 ####################
 def model_selection(selection):
     if selection == "resnet":
-        model = models.resnet18()
+        model = models.resnet18(weights='IMAGENET1K_V1')
         model.conv1 =  nn.Conv2d(3, 64, kernel_size=3,stride=1, padding=1, bias=False)
         model.layer4 = Identity()
-        model.fc = nn.Linear(256, 50)
+        model.fc = nn.Sequential(
+        nn.ReLU(inplace=True),
+        nn.Dropout(p=0.8),
+        nn.Linear(256, 50)
+        )
     elif selection == "vgg":
         model = models.vgg11_bn()
         model.features = nn.Sequential(*list(model.features.children())[:-7])
         model.classifier = nn.Sequential( nn.Linear(in_features=25088, out_features=50, bias=True))
     elif selection == "mobilenet":
-        model = models.mobilenet_v2()
-        model.classifier = nn.Sequential(nn.Linear(in_features=1280, out_features=50, bias=True))
-    elif  selection =='custom':
-        model = Custom_model()
+        model = models.mobilenet_v2(weights='IMAGENET1K_V2')
+        model.classifier = nn.Sequential(
+          nn.ReLU(inplace=True),
+          nn.Dropout(p=0.3),
+          nn.Linear(in_features=1280, out_features=50)
+        )
+        
     return model
 
 
 
 def train(net1, labeled_loader, optimizer, criterion):
     net1.train()
+    correct = 0
+    total = 0
+    total_loss = 0
+    num_samples = 0
     #Supervised_training
     for batch_idx, (inputs, targets) in enumerate(labeled_loader):
         if torch.cuda.is_available():
             inputs, targets = inputs.cuda(), targets.cuda()
         optimizer.zero_grad()
-        
+        outputs = net1(inputs)
+        loss = criterion(outputs, targets)
+        total_loss += loss.item() * inputs.size(0)
+        num_samples += inputs.size(0)
+        total += targets.size(0)
+        _, predicted = outputs.max(1)
+        correct += predicted.eq(targets).sum().item()
+        loss.backward()
+        optimizer.step()
+    avg_loss = total_loss / num_samples
+    res = 100. * correct / total
+    print("train loss: {:.4f}".format(avg_loss))
+    print("train res: {}".format(res))
         ####################
         #Write your Code
         #Model should be optimized based on given "targets"
@@ -118,6 +122,7 @@ def test(net, testloader):
 
 
 
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
@@ -132,7 +137,7 @@ if __name__ == "__main__":
 
 
 
-    batch_size = #Input the number of batch size
+    batch_size = 16
     if args.test == 'False':
         train_transform = transforms.Compose([
                     transforms.RandomResizedCrop(64, scale=(0.2, 1.0)),
@@ -146,7 +151,7 @@ if __name__ == "__main__":
                 ])
         
         dataset = CustomDataset(root = './data/Supervised_Learning/labeled', transform = train_transform)
-        labeled_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
+        labeled_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True)
         
         dataset = CustomDataset(root = './data/Supervised_Learning/val', transform = test_transform)
         val_loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
@@ -158,7 +163,7 @@ if __name__ == "__main__":
         ])
         
 
-    model_name = #Input model name to use in the model_section class
+    model_name = 'mobilenet'
                  #e.g., 'resnet', 'vgg', 'mobilenet', 'custom'
 
     if torch.cuda.is_available():
@@ -167,7 +172,7 @@ if __name__ == "__main__":
         model = model_selection(model_name)
 
     params = sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6
-
+    print(params)
     #You may want to write a loader code that loads the model state to continue the learning process
     #Since this learning process may take a while.
     
@@ -177,8 +182,10 @@ if __name__ == "__main__":
     else :
         criterion = nn.CrossEntropyLoss()
     
-    epoch =  #Input the number of Epochs
-    optimizer = #Your optimizer here
+    epoch =  30
+    optimizer = optim.Adam(model.parameters(), lr=0.00005, weight_decay=0.0001)
+    #scheduler = optim.lr_scheduler.ExponentialLR(optimizer, 0.95, last_epoch=- 1, verbose=False)
+
     #You may want to add a scheduler for your loss
     
     best_result = 0
